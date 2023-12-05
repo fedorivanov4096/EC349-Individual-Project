@@ -1,0 +1,446 @@
+---
+title: "EC349 Individual Project Write-up"
+author: "Fedor Ivanov"
+date: "2023-11-28"
+output: html_document
+---
+
+### Tabula statement:
+
+We're part of an academic community at Warwick.
+
+Whether studying, teaching, or researching, we’re all taking part in an expert conversation which must meet standards of academic integrity.\
+When we all meet these standards, we can take pride in our own academic achievements, as individuals and as an academic community.
+
+Academic integrity means committing to honesty in academic work, giving credit where we've used others' ideas and being proud of our own achievements.
+
+In submitting my work I confirm that:
+
+ 1. I have read the guidance on academic integrity provided in the Student Handbook and understand the University regulations in relation to Academic Integrity.\
+ I am aware of the potential consequences of Academic Misconduct.
+
+ 2. I declare that the work is all my own, except where I have stated otherwise.
+
+ 3. No substantial part(s) of the work submitted here has also been submitted by me in other credit bearing assessments courses of study\
+ (other than in certain cases of a resubmission of a piece of work), and I acknowledge that if this has been done this may lead to an appropriate sanction.
+
+ 4. Where a generative Artificial Intelligence such as ChatGPT has been used I confirm I have abided by both the University guidance and\ 
+ specific requirements as set out in the Student Handbook and the Assessment brief.I have clearly acknowledged the use of any generative Artificial\ 
+ Intelligence in my submission, my reasoning for using it and which generative AI (or AIs) I have used.\
+ Except where indicated the work is otherwise entirely my own.
+
+ 5. I understand that should this piece of work raise concerns requiring investigation in relation to any of points above,\
+ it is possible that other work I have submitted for assessment will be checked, even if marks (provisional or confirmed) have been published.
+
+ 6. Where a proof-reader, paid or unpaid was used, I confirm that the proofreader was made aware of and has complied with the University’s proofreading policy.
+
+ 7. I consent that my work may be submitted to Turnitin or other analytical technology. I understand the use of this service (or similar),\
+ along with other methods of maintaining the integrity of the academic process, will help the University uphold academic standards and assessment fairness.
+
+Privacy statement
+
+The data on this form relates to your submission of coursework. The date and time of your submission, your identity,\
+and the work you have submitted will be stored. We will only use this data to administer and record your coursework submission.
+
+Related articles
+
+Reg. 11 Academic Integrity (from 4 Oct 2021)
+
+Guidance on Regulation 11
+
+Proofreading Policy  
+
+Education Policy and Quality Team
+
+Academic Integrity (warwick.ac.uk)
+
+This is the end of the statement to be included.
+
+## Main text
+
+```{r data_creation, echo=FALSE, message=FALSE, results="hide", warning=FALSE}
+
+#This code to compile the dataset for creating the exhibits throughout this document. Change the working directory as needed
+
+#install these packages separately, it is hard to install inside an RMD file. Here is the code:
+# install.packages('jsonlite')
+# install.packages('caret')
+# install.packages('tidyverse')
+# install.packages('lubridate')
+# install.packages('glmnet')
+# install.packages('hexbin')
+# install.packages('glue')
+# install.packages('SentimentAnalysis')
+# install.packages('SnowballC')
+# install.packages('tree')
+# install.packages('rpart')
+# install.packages('rpart.plot')
+# install.packages('randomForest')
+# install.packages('adabag')
+# install.packages('Hmisc')
+# install.packages('janitor')
+# install.packages('tidytext')
+# install.packages('textdata')
+# install.packages('corrplot')
+# install.packages('mlbench')
+# install.packages('ipred')
+
+library(jsonlite)
+library(caret)
+library(tidyverse)
+library(lubridate)
+library(glmnet)
+library(hexbin)
+library(glue)
+library(SentimentAnalysis)
+library(SnowballC)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(adabag)
+library(Hmisc)
+library(janitor)
+library(tidytext)
+library(textdata)
+library(corrplot)
+
+#Clear
+cat("\014")  
+rm(list=ls())
+
+
+#Set Directory as appropriate
+setwd("C:/Users/Fedor MacBook/OneDrive/UNI/R/EC349 Invidual Project")
+
+#Load Different Data Files
+business_data <- stream_in(file("yelp_academic_dataset_business.json")) #note that stream_in reads the json lines (as the files are json lines, not json)
+checkin_data  <- stream_in(file("yelp_academic_dataset_checkin.json")) #note that stream_in reads the json lines (as the files are json lines, not json)
+tip_data  <- stream_in(file("yelp_academic_dataset_tip.json")) #note that stream_in reads the json lines (as the files are json lines, not json)
+load(file='yelp_user_small.Rda')
+load(file='yelp_review_small.Rda')
+
+
+checkin_data<-checkin_data %>% 
+  mutate(checkins=1+(str_count(date, ","))) %>% 
+  select(-date)
+
+all_data <- review_data_small %>% 
+  left_join(business_data, suffix = c(".review", ".business"), by=c("business_id")) %>% 
+  left_join(user_data_small, suffix = c(".review", ".user"), by=c("user_id")) %>% 
+  left_join(checkin_data) 
+
+#Data unpacking and filtering
+all_data <- all_data%>% 
+  mutate(stars.review=factor(stars.review)) %>% 
+  unnest(attributes) %>% 
+  unnest(hours) %>% 
+  rename(stars.user=average_stars)
+
+
+all_data<-all_data[complete.cases(all_data[ , 76]),] #removing all observations which don't have user data
+#This is becasue user data is really significant in prediction and users average stars is closely 
+#correlated to reviews as many users have small review counts
+all_data<-all_data[complete.cases(all_data[ , 88]),] # removing all observations with don't have a visit count
+#visit count is closely correlated with stars for obvious reasons
+
+small_data<-NULL
+stacked_data<-NULL
+
+all_data<-all_data %>%
+  rename(review_text = text)
+
+for(x in 1:272){
+  small_data<- all_data[((x-1)*1000+1):(1000*x),] %>%
+    select(-date) %>%
+    left_join(tip_data, multiple = "last") %>%
+    select(-date) %>%
+    mutate(mood_review=analyzeSentiment(review_text)$SentimentGI) %>%
+    mutate(mood_tip=analyzeSentiment(text)$SentimentGI) %>%
+    mutate(mood_review=case_when(is.nan(mood_review) ~ 0, TRUE ~ mood_review)) %>%
+    mutate(mood_tip=case_when(is.nan(mood_tip) ~ 0, TRUE ~ mood_tip)) %>%
+    mutate(mood_review_direction=convertToDirection(mood_review)) %>%
+    mutate(mood_tip_direction=convertToDirection(mood_tip))
+
+  stacked_data<-stacked_data %>%
+  rbind(small_data)
+  print(x)#This is just to keep track of progress
+}
+
+stacked_data<-distinct(stacked_data)
+
+small_data=NULL
+
+
+small_data<- all_data[272001:272209,] %>%
+  select(-date) %>%
+  left_join(tip_data, multiple = "last") %>%
+  select(-date) %>%
+  mutate(mood_review=analyzeSentiment(review_text)$SentimentGI) %>%
+  mutate(mood_tip=analyzeSentiment(text)$SentimentGI) %>%
+  mutate(mood_tip=case_when(is.nan(mood_tip) ~ 0, TRUE ~ mood_tip)) %>%
+  mutate(mood_review=case_when(is.nan(mood_review) ~ 0, TRUE ~ mood_review)) %>%
+  mutate(mood_review_direction=convertToDirection(mood_review)) %>%
+  mutate(mood_tip_direction=convertToDirection(mood_tip))
+stacked_data<-rbind(stacked_data, small_data)
+
+save(stacked_data, file="sentiment_data.Rda")
+
+#Here I save the data as the sentiment analysis takes a while to run.
+#I load it straight back in
+
+rm(stacked_data)
+
+
+
+load(file='sentiment_data.Rda')
+
+#Creating binary variable which shows whether user has left a tip_data
+
+all_data<-stacked_data
+
+all_data<-all_data %>% 
+  mutate(tip_exists=case_when(is.na(text)~0, TRUE~1))
+  
+mean(all_data$tip_exists)
+#There is only a tip for 5% of observations, so I have chosen to ignore this variable to avoid overfitting.
+
+all_data <- all_data %>% 
+  select(-tip_exists, -mood_tip_direction, -text, -compliment_count, -mood_tip)
+
+selected_data <-all_data %>% 
+  select(stars.review, useful.review, funny.review, cool.review, state, longitude, stars.business,
+         review_count.review, HasTV, Alcohol, GoodForKids, NoiseLevel, review_count.user, useful.user,
+         fans, average_stars, compliment_writer,checkins, mood_review_direction) %>% 
+  mutate(HasTV=as.factor(case_when(is.na(HasTV)~"None", TRUE~HasTV))) %>%  
+  mutate(GoodForKids=as.factor(case_when(is.na(GoodForKids)~"None", TRUE~GoodForKids))) %>% 
+  mutate(Alcohol=as.factor(case_when(is.na(Alcohol)~"None",
+                                     Alcohol=="u'beer_and_wine'" ~ "'beer_and_wine'",
+                                     Alcohol=="u'full_bar'" ~ "'full_bar'",
+                                     Alcohol=="u'none'" ~ "'none'",
+                                     TRUE~Alcohol))) %>% 
+  mutate(NoiseLevel=as.factor(case_when(is.na(NoiseLevel)~"None",
+                                        NoiseLevel=="u'quiet'" ~ "'quiet'",
+                                        NoiseLevel=="u'average'" ~ "'average'",
+                                        NoiseLevel=="u'loud'" ~ "'loud'",
+                                        NoiseLevel=="u'very_loud'" ~ "'very_loud'",
+                                        TRUE~NoiseLevel))) %>% 
+  add_count(state) %>% 
+  mutate(state=factor(case_when(n < 100 ~ 'Other', TRUE ~ state))) %>% 
+  select(-n)
+
+```
+### Introduction
+
+The aim of the model is to predict the stars of the review as accurately as possible. I will use all the other datasets provided in order\
+to predict the review for business j by user i.Even though the rules of the assignment are not clear, I will assume that I am able to use the\
+other information about the review such as the text in order to inform my prediction.
+
+### Data Science Methodology
+
+In order to approach this problem in an organised way, I have decided that the Crisp-DM methodology is the most suitable.\
+It is an intuitive methodology and I believe the format of this assignment mitigates its disadvantages.
+
+1. Documentation-Heavy - This project requires a detailed write-up, so this is not a weakness in this situation. 
+
+2. Not a Project Management Approach - This is an individual project, so there is no need to manage several workflows. 
+
+3. Does not take into account stakeholders - This project does not have several stakeholders, so this weakness is not applicable.
+
+
+I slightly adapted CRISP-DM to suit the project better. Firstly, I will run the data understanding and data preparation steps concurrently,\
+evaluating the variables and then adapting/removing them as necessary.
+Secondly, I will not carry out an implementation step,\
+as the aim of the assignment is to optimise the evaluation stage result.
+
+### Biggest Challenge
+
+
+The biggest challenge of this assignment for me was variable selection.
+
+I dealt with numeric and integer variables by building a correlation matrix to see how they are interrelated. Here is the table:
+
+```{r corrplot, echo=FALSE}
+numeric_all<-all_data %>%
+  mutate(stars.review=as.integer(stars.review)) %>%
+  select_if(is.numeric)
+corr_mat<-cor(numeric_all)
+corrplot(corr_mat, type = "upper", order = "hclust",
+         tl.col = "black", tl.srt = 45, tl.cex=0.5)
+
+```
+
+This graph only shows the very strong correlations for stars.review with stars.user and stars.business.\
+There are also other variables which correlate with stars.review, like review_count.review with a correlation of 0.065.
+
+
+The factor variables are mostly the business attributes. I had pick these variables manually because of 3 main issues:
+
+* A lot of these variables' impact are already reflected in stars.user and stars.business. For example, a variable like WiFi is unlikely to\
+have much usefulness, as it will be  reflected in the stars.business variable as it has a strictly positive impact.
+
+* As well as this, there are some variables that do not have a very significant effect, such as BikeParking. This means that those variable has limited explanatory power.
+
+* Some variables, such as Smoking, are over 80% NAs.
+
+In the end, I decided to for 4 factor predictors that I thought would have a significant effect, were not directly correlated with stars.business\
+and had enough data. These were NoiseLevel, Alcohol, HasTV, GoodforKids and state. 
+
+#### NoiseLevel Table
+```{r NoiseLevel table col, echo=FALSE, warning=FALSE}
+selected_data %>% tabyl(stars.review, NoiseLevel) %>%
+  adorn_totals(c( "col")) %>%
+  adorn_percentages("col") %>%
+  adorn_pct_formatting(rounding = "half up", digits = 0) 
+```
+#### Alcohol Table
+```{r Alcohol table col, echo=FALSE, warning=FALSE}
+selected_data %>% tabyl(stars.review, Alcohol) %>%
+  adorn_totals(c("col")) %>%
+  adorn_percentages("col") %>%
+  adorn_pct_formatting(rounding = "half up", digits = 0) 
+```
+#### HasTV Table
+```{r HasTV table col, echo=FALSE, warning=FALSE}
+selected_data %>% tabyl(stars.review, HasTV) %>%
+  adorn_totals(c("col")) %>%
+  adorn_percentages("col") %>%
+  adorn_pct_formatting(rounding = "half up", digits = 0) 
+```
+#### GoodForKids Table
+```{r GoodForKids table col, echo=FALSE, warning=FALSE}
+selected_data %>% tabyl(stars.review, GoodForKids) %>%
+  adorn_totals(c("col")) %>%
+  adorn_percentages("col") %>%
+  adorn_pct_formatting(rounding = "half up", digits = 0) 
+```
+#### State Table
+```{r states table col, echo=FALSE, warning=FALSE}
+selected_data %>% tabyl(stars.review, state) %>%
+  adorn_totals(c("col")) %>%
+  adorn_percentages("col") %>%
+  adorn_pct_formatting(rounding = "half up", digits = 0) 
+```
+
+
+### Method
+
+
+In order to predict the data, I have decided to use a Random Forest model. Here are the main reasons:
+
+* The Random Forest Algorithm is highly accurate and widely used, meaning that it is able to integrate the data into a predictive model\
+in a way I can trust. The models are also generally quite robust, compared to other options.
+
+* As a lot of our variable are likely to be somewhat correlated, such as stars.business and check-ins at the business\
+(because higher reviews lead to more poeple visiting, especially those using Bing check-in).\
+The RandomForest algorithm handles this well by only using some of the variables at a time.
+
+* Also the random forest algorithm can be a bit of a black box, we can extract some interpretability from the model using\
+metrics such as feature importance.
+
+* I considered using other algorithms than random forest, such as bagging but they performed significantly worse than Random Forest.
+
+* I would prefer to run a boosting algorithm with this data, especially because a lot of the issue that the prediction will face will be\
+differentiating 4-star and 3-star observations from the far more common 5-stars,
+but the issue is that running a boosting\
+algorithm took too long given my resources (a single model took over 12 hours to run), so I did not have had time to tune the model. 
+
+#### Tuning my random forest
+
+Random Forest Tuning Parameters:
+
+* mtry: The number of variables that each split considers. This is usually used as the square root of the number of variables, but I will\
+check to see whether a different number works better.
+* ntree: The number of trees the model averages it over.This should maximised, but has diminishing returns after a point.
+* maxnodes: A setting to control the maximum number of terminal nodes. Setting this too high may cause overfitting,\
+setting it too low means the model isn't as accurate.
+
+Number of variables per split(mtry)|Number of terminal nodes (maxnodes)|number of trees(ntrees)|Accuracy in Training |Accuracy in Test | Notes
+:-:|:-:|:-:|:-: |:-:| :-:
+4| 1000 | 100 | 58.98% | 58.66% | Start of Step 1, looking for overfitting
+4| 2000 | 100 | 60.15% | 59.05% | 
+4| 3000 | 100 | 60.99% | 59.29% | The 95% confidence intervals of the accuracy no longer overlap, suggesting overfitting
+4| 4000 | 100 | 61.83% | 59.42% |  The 95% confidence intervals of the accuracy no longer overlap, suggesting overfitting
+4| 5000 | 100 | 62.58% | 59.50% | The 95% confidence intervals of the accuracy no longer overlap, suggesting overfitting
+2| 2000| 100 |  58.69%| 57.72% |  Significantly worse results than default
+3| 2000| 100 |  59.38%| 58.47% | Significantly worse results than default
+5| 2000| 100 |  60.43%| 59.34% | Similar results to default
+6| 2000| 100 |  60.53%| 59.52% | Significantly better results
+7| 2000| 100 | 60.62% | 59.62% | Significantly better results
+8| 2000| 100 |  60.71%| 59.76% | Significantly better results
+9| 2000| 100 |  60.73%| 59.76% | No clear improvement
+10| 2000| 100 | 60.75% | 59.76% | No clear improvement
+11| 2000| 100 | 60.78% | 59.75 | No clear improvement
+12| 2000| 100 | 60.83% | 59.65% | No clear improvement
+8| 2000| 100 |  60.69%| 59.75% |
+8| 2000| 1000 |  60.72%|  59.65% | Significantly different results
+8| 2000| 10000 |  60.68%|  59.65% | No clear improvement
+
+1. Start with the default number of variables (4 is the closest integer closest to the square root ofthe number of features). I will increase\
+the number of nodes until I observe evidence overfitting, when the model becomes significantly more accurate on training data than on test data.\
+In this case this happened when maxnodes was greater than 2000. Beyond 2000 maxnodes,\
+we observe significant differences between the accuracy on training and test data, suggesting overfitting.
+
+2. I then vary the number of variables we include in each split of the random forest, 
+ starting from 2 up to 12.\
+ Here we see that the best prediction is when the number of variables is 8 which is much bigger than 4.\
+This is because we have a few variables which are better predictors than the others, such as stars.user (I will show this on a graph later).\
+This means random forest is not the perfect model for simulating this data, but as discussed earlier,\
+I was unable to run a boosting algorithm due to computational limitations and bagging produced much worse results. 
+
+3. Once we settle on an optimal mtry of 8, we can now start to vary the number of trees until the increase no \
+longer significantly changes the results. We see changes in performance as we increase the number of tree to 1000, but not 10000.\
+This makes me conclude that 1000 trees is enough. 
+
+As such, I conclude that the best configuration of the model is mtry=8, ntrees=1000 and maxnodes=2000.
+
+### Results Evaluation
+
+```{r final_model, echo=FALSE, warning=FALSE}
+set.seed(1)
+percentage_sampled = 10000/272209-0.0000077    #The small subtraction is to avoid a rounding error which gave me 10002 test observations
+trainIndex <- createDataPartition(all_data$stars.review, p = percentage_sampled, list = 0)
+
+test_reviews=selected_data[ trainIndex,]
+
+train_reviews=selected_data[ -trainIndex,]
+
+
+Yelp_Review_Random_Forest<-randomForest(stars.review~.,data=train_reviews, ntree=1000, cp=0.001, method=class, mtry=8, type="prob", maxnodes=2000)
+
+varImpPlot(Yelp_Review_Random_Forest)
+
+Yelp_Review_Random_Forest_Prediction_Train = predict(Yelp_Review_Random_Forest, train_reviews)
+confusionMatrix(Yelp_Review_Random_Forest_Prediction_Train, train_reviews$stars.review)
+
+
+Yelp_Review_Random_Forest_Prediction_Test = predict(Yelp_Review_Random_Forest, test_reviews)
+confusionMatrix(Yelp_Review_Random_Forest_Prediction_Test, test_reviews$stars.review)
+```
+
+
+Positives:
+
+* The model predicts test data at a rate of over 59.65%, which is 39.65% better than random and over 13% better than just predicting every review as 5 stars.\
+Human opinions are a hard thing to predict, especially with limited variables, so I think the model does a pretty decent job in terms of prediction.
+
+* The variables I derived from the existing data were useful. The sentiment analysis of the review was one of the top 4 most important variables,\
+and the check-in variable also had high importance.
+
+* I prevented significant overfitting in the model by regulating the number of maximum terminal nodes.
+
+Negatives:
+
+* Considering the fact that I had a few variables which were more important than the others, a RandomForest model was not the prefect fit.\ 
+This is why I had to increase the number of variables in each
+split significantly from the default.\
+However, a bagging model performed poorly, and I was unable to run a boosting model in a reasonable amount of time.\
+I have provided the code for both, commented out in the code at the bottom.
+
+* My business attribute variables (Alcohol, HasTv, NoiseLevel, GoodforKids) did not perform well. All 4 were the least useful when building the tree.\
+However, I am quite confident that they are more powerful than the alternatives, and excluding them gives worse predictive results.
+
+Overall I think my model is a moderate success. It has decent predictive power, is well-tuned and I extracted extra information from the data.\
+But I think that I was somewhat limited in the type of models I could run and a lot of variable were highly correlated with each other.
+
+Word Count (excluding tables, titles and graphs) - Total: 1246 words    DS Methodology: 149 words    Biggest Challenge: 199 words
