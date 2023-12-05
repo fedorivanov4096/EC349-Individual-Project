@@ -89,8 +89,6 @@ all_data<-all_data[complete.cases(all_data[ , 76]),]
 #This is also later reflected in the correlation matrix I create for all the numeric variables.
 all_data<-all_data[complete.cases(all_data[ , 88]),] 
 #I remove the observations which have NAs for checkins. 
-Firefox file:///C:/Users/Fedor%20MacBook/OneDrive/UNI/R/EC349%20Invi...
-1 of 5 05/12/2023, 00:35
 #This variable has a significant positive correlation, as one would expect. 
 #Setting all the NAs to 0 creates significantly worse model results than just dropping the observations, 
 #as there are few NAs in this variable. As such I think dropping the NA variables is sensible. 
@@ -169,8 +167,6 @@ selected_data<-selected_data %>%
          -compliment_funny, -compliment_photos)
 #Dropped variable with less than a 0.01 correlation, as well as the user and compliment characteristics 
 #expect the best of each (compliment_writer and useful.user) and these are highly correlated among each other
-Firefox file:///C:/Users/Fedor%20MacBook/OneDrive/UNI/R/EC349%20Invi...
-2 of 5 05/12/2023, 00:35
 #SPECIFICS
 selected_data<-selected_data %>% 
   select(-review_id, -user_id, -business_id, -review_text, -name.review, -address, -city, -friends, name.user)
@@ -258,8 +254,6 @@ for(x in 2:12){
     for(z in 2:2){
       tune(x,(y*50),(z*1000))
     }
-    Firefox file:///C:/Users/Fedor%20MacBook/OneDrive/UNI/R/EC349%20Invi...
-    3 of 5 05/12/2023, 00:35
   }
 }
 # 2. I then vary the number of variables we include in each split of the random forest, 
